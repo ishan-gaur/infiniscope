@@ -170,12 +170,16 @@ class CrossAttention(nn.Module):
     def forward(self, x, context=None, mask=None):
         h = self.heads
 
+        # print("X:", x.shape)
         q = self.to_q(x)
         context = default(context, x)
+        if len(context.size()) == 2:
+            context = context.repeat(q.shape[0], 1, 1)
         k = self.to_k(context)
         v = self.to_v(context)
-
+        # print("Before:", q.shape, k.shape, v.shape)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
+        # print("After:", q.shape, k.shape, v.shape)
 
         sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
 

@@ -2,7 +2,7 @@ model:
   base_learning_rate: 5.0e-5   # set to target_lr by starting main.py with '--scale_lr False'
   target: ldm.models.diffusion.ddpm.LatentDiffusion
   params:
-    ckpt_path: /home/wei.ouyang/workspace/stable-diffusion/logs/2022-11-16T19-35-18_hpa-ldm-vq-4-hybrid-protein/checkpoints/last.ckpt
+    # ckpt_path: /data/ishang/seqIF/logs/hpa-ldm-vq-4-hybrid-protein/checkpoints/last.ckpt
     linear_start: 0.0015
     linear_end: 0.0155
     num_timesteps_cond: 1
@@ -38,10 +38,25 @@ model:
         model_channels: 192
         attention_resolutions: [ 1, 2, 4, 8 ]   # 32, 16, 8, 4
         num_res_blocks: 2
-        channel_mult: [ 1,2,2,4,4 ]  # 32, 16, 8, 4, 2
+        channel_mult: [ 1, 2, 2, 4, 4 ]  # 32, 16, 8, 4, 2
         num_heads: 8
         use_scale_shift_norm: True
         resblock_updown: True
+        use_spatial_transformer: True
+        context_dim: 806
+
+        # image_size: 32 # unused
+        # in_channels: 4
+        # out_channels: 4
+        # model_channels: 320
+        # attention_resolutions: [ 4, 2, 1 ]
+        # num_res_blocks: 2
+        # channel_mult: [ 1, 2, 4, 4 ]
+        # num_heads: 8
+        # transformer_depth: 1
+        # context_dim: 768
+        # use_checkpoint: True
+        # legacy: False
 
     first_stage_config:
       target: ldm.models.autoencoder.VQModelInterface
@@ -49,7 +64,7 @@ model:
         embed_dim: 3
         n_embed: 8192
         # autoencoder for the reference + protein channel
-        ckpt_path: /home/wei.ouyang/workspace/stable-diffusion/logs/2022-11-06T04-05-25_autoencoder_vq_f4_hpa_p/checkpoints/last.ckpt
+        ckpt_path: /data/ishang/seqIF/logs/autoencoder_vq_f4_hpa_p/checkpoints/last.ckpt
         ddconfig:
           double_z: false
           z_channels: 3
@@ -76,7 +91,7 @@ model:
             embed_dim: 3
             n_embed: 8192
             # autoencoder for the reference channel
-            ckpt_path: /home/wei.ouyang/workspace/stable-diffusion/logs/2022-10-14T09-02-57_autoencoder_vq_f4_hpa_r/checkpoints/last.ckpt
+            ckpt_path: /data/ishang/seqIF/logs/autoencoder_vq_f4_hpa_r/checkpoints/last.ckpt
             ddconfig:
               double_z: false
               z_channels: 3
