@@ -690,6 +690,12 @@ if __name__ == "__main__":
     print("#### Data #####")
     for k in data.datasets:
         print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
+        for s in data.datasets[k].samples:
+            sample_type = s['caption'].split('/')
+            sample_type[2] = sample_type[2].split(',')
+            print(sample_type)
+            # which # per protein, cell-lines, localizations
+            # same proteins across sets
 
     # configure learning rate
     bs, base_lr = config.data.params.batch_size, config.model.base_learning_rate

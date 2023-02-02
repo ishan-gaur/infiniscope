@@ -13,6 +13,18 @@
             "justMyCode": true
         },
         {
+            "name": "Analyze: dataset",
+            "type": "python",
+            "request": "launch",
+            "program": "dataset_explorer.py",
+            "args": [
+                "-b",
+                "configs/latent-diffusion/hpa-ldm-vq-4-hybrid-protein-debug.yaml"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
             "name": "Train: hpa-ldm-vq-4-unconditional",
             "type": "python",
             "request": "launch",
@@ -43,7 +55,7 @@
             "justMyCode": true
         },
         {
-            "name": "Train: hpa-ldm-vq-4-hybrid-protein",
+            "name": "Train: hpa-ldm-vq-4-hybrid-protein-debug",
             "type": "python",
             "request": "launch",
             "program": "main.py",
@@ -52,6 +64,21 @@
                 "-b",
                 "configs/latent-diffusion/hpa-ldm-vq-4-hybrid-protein-debug.yaml",
                 "--gpus=0,1,2,3",
+                "--scale_lr=False"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Train: hpa-ldm-vq-4-hybrid-protein",
+            "type": "python",
+            "request": "launch",
+            "program": "main.py",
+            "args": [
+                "-t",
+                "-b",
+                "configs/latent-diffusion/hpa-ldm-vq-4-hybrid-protein-ishan.yaml",
+                "--gpus=0,1,2,3,4,5,6,7",
                 "--scale_lr=False"
             ],
             "console": "integratedTerminal",
