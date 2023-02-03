@@ -13,13 +13,25 @@
             "justMyCode": true
         },
         {
-            "name": "Analyze: dataset",
+            "name": "Analyze: dataset-debug",
             "type": "python",
             "request": "launch",
             "program": "dataset_explorer.py",
             "args": [
                 "-b",
                 "configs/latent-diffusion/hpa-ldm-vq-4-hybrid-protein-debug.yaml"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Analyze: dataset",
+            "type": "python",
+            "request": "launch",
+            "program": "dataset_explorer.py",
+            "args": [
+                "-b",
+                "configs/latent-diffusion/hpa-ldm-vq-4-hybrid-protein.yaml"
             ],
             "console": "integratedTerminal",
             "justMyCode": true
@@ -78,7 +90,7 @@
                 "-t",
                 "-b",
                 "configs/latent-diffusion/hpa-ldm-vq-4-hybrid-protein-ishan.yaml",
-                "--gpus=0,1,2,3,4,5,6,7",
+                "--gpus=4,5,6,7", // TODO: add this back
                 "--scale_lr=False"
             ],
             "console": "integratedTerminal",
