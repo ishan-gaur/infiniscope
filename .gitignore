@@ -2,8 +2,14 @@ models/*
 data
 logs
 *.png
+*.csv
 taming
 src
+
+# User specific
+model_checkpoints/*
+scratch
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

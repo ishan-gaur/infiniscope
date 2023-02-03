@@ -89,7 +89,7 @@
             "args": [
                 "-t",
                 "-b",
-                "configs/latent-diffusion/hpa-ldm-vq-4-hybrid-protein-ishan.yaml",
+                "configs/latent-diffusion/hpa-ldm-vq-4-hybrid-protein.yaml",
                 "--gpus=4,5,6,7", // TODO: add this back
                 "--scale_lr=False"
             ],
