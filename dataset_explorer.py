@@ -3,8 +3,10 @@
 import os
 import sys
 import csv
+import copy
 import datetime
 import numpy as np
+import prettyprinter as pp
 from collections import Counter
 from omegaconf import OmegaConf
 import matplotlib.pyplot as plt
@@ -38,46 +40,52 @@ ckptdir = os.path.join(logdir, "checkpoints")
 cfgdir = os.path.join(logdir, "configs")
 seed_everything(opt.seed)
 
-# try:
-    # import pdb; pdb.set_trace()
-    # init and save configs
+# Get config
 configs = [OmegaConf.load(cfg) for cfg in opt.base]
 cli = OmegaConf.from_dotlist(unknown)
 config = OmegaConf.merge(*configs, cli)
 
 
-data = instantiate_from_config(config.data)
+# Retrieve dataset from config
 # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html
 # calling these ourselves should not be necessary but it is.
 # lightning still takes care of proper multiprocessing though
+data = instantiate_from_config(config.data)
 data.prepare_data()
 data.setup()
 
+# Retrieve protein, cell_line, and location counts
 data_profile = {}
+start_index = 0
 for k in data.datasets:
     print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
-    dataset = data.datasets[k].samples[:len(data.datasets[k])] # TODO: All the samples in data are in a single array
+    # dataset = data.datasets[k].samples
+    offset = len(data.datasets[k])
+    dataset = data.datasets[k].samples[start_index : start_index + offset] # TODO: All the samples in data are in a single array
+    start_index += offset
+    
     data_profile[k] = {}
     proteins, cell_lines, locs = Counter(), Counter(), Counter()
 
     for sample in dataset:
         sample_type = sample['caption'].split('/')
         sample_type[2] = sample_type[2].split(',')
+        if sample_type[0] == 'nan':
+            continue
         proteins.update([sample_type[0]])
         cell_lines.update([sample_type[1]])
         locs.update(sample_type[2])
-    
+
     data_profile[k]["Protein Counts"] = proteins
     data_profile[k]["Cell Line Counts"] = cell_lines
     data_profile[k]["Localization Counts"] = locs
 
-    fig, axs = plt.subplots(1, 3)
+    fig, axs = plt.subplots(1, len(data_profile[k]))
     for i, label in enumerate(data_profile[k].keys()):
         x = data_profile[k][label].values()
-        logbins = np.geomspace(min(x), max(x), 10)
-        axs[i].hist(x, bins=logbins)
+        logbins = np.logspace(np.log(min(x)), np.log(max(x)), 10)
+        axs[i].hist(x, bins=10, density=True)
         axs[i].title.set_text(label)
-        axs[i].set_xscale('log')
 
         with open(f"{k}_{label}.csv", "w", newline="") as f:
             fieldnames = [label, "count"]
@@ -87,3 +95,79 @@ for k in data.datasets:
                 writer.writerow([key, val])   
 
     plt.savefig(f'{k}.png')
+
+# calculate counts of common proteins, cell-lines, and localizations between datasets
+# copy data
+common = copy.deepcopy(data_profile[k])
+for k in data_profile.keys():
+    for c in common:
+        common[c] = common[c] & data_profile[k][c]
+
+for c in common:
+    for v in common[c]:
+        # denominator should be updated to exclude nans
+        common[c][v] = [common[c][v] / len(data.datasets[k]) for k in data_profile.keys()]
+
+for label in common:
+    for k, counts in common[label].items():
+        common[label][k] = [str(round(100 * count, 1)) + "%" for count in counts]
+
+pp.pprint(common)
+
+# get the localizations of each protein
+protein_localizations = {}
+start_index = 0
+for k in data.datasets:
+    offset = len(data.datasets[k])
+    dataset = data.datasets[k].samples[start_index : start_index + offset] # TODO: All the samples in data are in a single array
+    start_index += offset
+    
+    for sample in dataset:
+        sample_type = sample['caption'].split('/')
+        sample_type[2] = sample_type[2].split(',')
+        if sample_type[0] not in protein_localizations:
+            protein_localizations[sample_type[0]] = set()
+        protein_localizations[sample_type[0]].update(sample_type[2])
+
+# count the number of localizations for each protein
+protein_localization_counts = {}
+for protein, localizations in protein_localizations.items():
+    protein_localization_counts[protein] = len(localizations)
+
+# plot counts of localizations for each protein
+plt.clf()
+x = protein_localization_counts.values()
+plt.hist(x, bins=10)
+plt.title("Protein Localization Counts")
+plt.savefig('protein_localization_counts.png')
+
+# print protein localization counts by dataset
+for k in data_profile:
+    multilocalizing = 0
+    for protein in data_profile[k]["Protein Counts"]:
+        if protein_localization_counts[protein] > 1:
+            multilocalizing += 1
+    print(f"{k} total proteins {len(data_profile[k]['Protein Counts'])}")
+    print(f"{k} has {multilocalizing} multilocalizing proteins")
+
+# histograms of dataset image intensities
+plt.clf()
+fig, axs = plt.subplots(2, len(data.datasets), sharey=True)
+start_index = 0
+for i, k in enumerate(data.datasets):
+    offset = len(data.datasets[k])
+    dataset = data.datasets[k].samples[start_index : start_index + offset] # TODO
+    start_index += offset
+
+    mean_intensities = []
+    var_intensities = []
+    for sample in dataset:
+        mean_intensities.append(sample['image'].mean())
+        var_intensities.append(sample['image'].var())
+
+    axs[0][i].hist(mean_intensities, bins=10, density=True)
+    axs[0][i].title.set_text(f"{k} Intensity Mean Histogram")
+    axs[1][i].hist(var_intensities, bins=10, density=True)
+    # axs[1][i].title.set_text(f"{k} Intensity Var Histogram")
+
+plt.savefig('intensity_histograms.png')
