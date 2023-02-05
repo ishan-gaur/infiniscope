@@ -111,6 +111,7 @@ model:
 
 
 data:
+  name: protein-split
   target: main.DataModuleFromConfig
   params:
     batch_size: 32
