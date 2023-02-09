@@ -43,6 +43,14 @@ def get_parser(**parser_kwargs):
         help="postfix for logdir",
     )
     parser.add_argument(
+        "--dev",
+        type=bool,
+        const=True,
+        default=False,
+        nargs="?",
+        help="write logs to dev directory",
+    )
+    parser.add_argument(
         "-r",
         "--resume",
         type=str,

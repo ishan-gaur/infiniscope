@@ -18,6 +18,7 @@
             "request": "launch",
             "program": "dataset_explorer.py",
             "args": [
+                "--dev",
                 "-b",
                 "configs/latent-diffusion/hpa-ldm-vq-4-hybrid-protein-debug.yaml"
             ],
@@ -34,7 +35,7 @@
                 "configs/latent-diffusion/hpa-ldm-vq-4-hybrid-protein.yaml"
             ],
             "console": "integratedTerminal",
-            "justMyCode": true
+            "justMyCode": true,
         },
         {
             "name": "Train: hpa-ldm-vq-4-unconditional",

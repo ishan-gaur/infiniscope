@@ -1,20 +1,28 @@
+# TODO rerun analysis from calculated stats on existing folder
+    # Need to save indices of each dataset for thi
 # TODO these need to be abstracted so they can be used over model outputs at inferece time
+# TODO and so that they all just deal with the dataset structure or external defined datatypes
 # TODO use the streaming module instead of loading into memory?
+# TODO protein names contain a list of them and their isoforms, so they are brittle to lookup by other names
 
 import os
 import sys
 import csv
 import copy
+import shutil
 import datetime
+import itertools
 import numpy as np
 import prettyprinter as pp
 from collections import Counter
 from omegaconf import OmegaConf
 import matplotlib.pyplot as plt
+from scipy.special import kl_div
 from pytorch_lightning import seed_everything
 from pytorch_lightning.trainer import Trainer
 
 from main import get_parser, instantiate_from_config
+from dataset_utils import printTab
 
 
 now = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
@@ -50,10 +58,19 @@ cli = OmegaConf.from_dotlist(unknown)
 config = OmegaConf.merge(*configs, cli)
 
 # setup logger to send output to file
-# TODO: change logdir name to include dataset name
-logdir = os.path.join(opt.logdir, f"dataset_{config.data['name']}_{now}")
+if opt.dev:
+    logdir = os.path.join(opt.logdir, "dataset_explorer_dev")
+else:
+    logdir = os.path.join(opt.logdir, f"dataset_{config.data['name']}_{now}")
 log_file = os.path.join(logdir, f"dataset_explorer.log")
-os.makedirs(os.path.dirname(log_file))
+os.makedirs(os.path.dirname(log_file), exist_ok=opt.dev)
+if opt.dev:
+    for root, dirs, files in os.walk(logdir):
+        for f in files:
+            os.unlink(os.path.join(root, f))
+        for d in dirs:
+            shutil.rmtree(os.path.join(root, d))
+
 print(f"Saving logs to {log_file}")
 sys.stdout = open(log_file, "w")
 
@@ -70,7 +87,7 @@ data.setup()
 data_profile = {}
 start_index = 0
 for k in data.datasets:
-    print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
+    print(f"\n{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
     
     # TODO: All the samples in data are in a single array
     offset = len(data.datasets[k])
@@ -95,6 +112,11 @@ for k in data.datasets:
     data_profile[k]["Cell Line Counts"] = cell_lines
     data_profile[k]["Localization Counts"] = locs
 
+    make_percent = lambda counts: {k: f"{round(100 * v / len(dataset), 2)}%" for (k, v) in counts}
+    printTab(f"Top 5 Proteins: {make_percent(proteins.most_common(5))}")
+    printTab(f"Top 5 Cell Lines: {make_percent(cell_lines.most_common(5))}")
+    printTab(f"Top 5 Locations: {make_percent(locs.most_common(5))}")
+
     # plot and save data
     fig, axs = plt.subplots(1, len(data_profile[k]))
     for i, label in enumerate(data_profile[k].keys()):
@@ -115,11 +137,15 @@ for k in data.datasets:
 # calculate counts of common proteins, cell-lines, and localizations between datasets
 # for each dataset, get the intersection of proteins, cell-lines, and localizations
 common = copy.deepcopy(data_profile[k])
-for k in data_profile.keys():
-    for c in common:
+total = {_k: set(v.keys()) for _k, v in data_profile[k].items()}
+for k in data_profile.keys(): # for each dataset
+    for c in common: # count of proteins, cell-lines, and localizations
         common[c] = common[c] & data_profile[k][c]
+        total[c] = total[c] | set(data_profile[k][c].keys())
 
 for c in common:
+    prop_shared = common[c] / total[c]
+    print(f"{common[c]} of {total[c]} classes in {c}, or {str(round(100 * prop_shared, 2))}: {len(common[c])}")
     for v in common[c]:
         # TODO: denominator should be updated to exclude nans
         common[c][v] = [common[c][v] / len(data.datasets[k]) for k in data_profile.keys()]
@@ -130,6 +156,42 @@ for label in common:
         common[label][k] = [str(round(100 * count, 1)) + "%" for count in counts]
 
 pp.pprint(common)
+
+# report KL-divergence between attribute distributions
+# need ps to get list across all keys, not just those present in one dataset or the other
+div_smoothing = {attr: [] for attr in total}
+smoothing_range = [0.1 ** i for i in range(0, 10)]
+for smoothing in smoothing_range:
+    ps = {k: {attr: [] for attr in data_profile[k]} for k in data_profile}
+    # todo sep KL by attribute
+    for k in data.datasets:
+        for attribute in total:
+            for classname in total[attribute]:
+                ps[k][attribute].append(data_profile[k][attribute][classname])
+            ps[k][attribute] = np.asarray(ps[k][attribute]) + len(data.datasets[k]) * smoothing
+            norm = np.sum(ps[k][attribute])
+            ps[k][attribute] /= norm 
+
+    combos = list(itertools.combinations(data.datasets.keys(), 2))
+    for combo in combos:
+        if smoothing == smoothing_range[2]: # turns out the exponent op on floats is imprecise
+            print(f"KL-divergence per feature for {combo[1]} and {combo[0]}:")
+        for attribute in total: # TODO: save these key lists into specially named things
+            div = np.sum(kl_div(ps[combo[1]][attribute], ps[combo[0]][attribute]))
+            div_smoothing[attribute].append(div) # only while two datasets
+            if smoothing == smoothing_range[2]:
+                print(f"\t{attribute}: {div}")
+
+# plot line graph of KL-divergence per feature as smoothing varies
+plt.clf()
+fig, axs = plt.subplots(1, len(div_smoothing))
+fig.suptitle('KL-divergence per feature as smoothing varies')
+for i, attribute in enumerate(div_smoothing):
+    axs[i].set_title(attribute)
+    axs[i].plot(smoothing_range, div_smoothing[attribute])
+    axs[i].set_xscale('log')
+plt.savefig(os.path.join(logdir, f'kl_divergence.png'))
+
 
 # get the localizations of each protein
 protein_localizations = {}
@@ -168,23 +230,27 @@ for k in data_profile:
     print(f"{k} has {multilocalizing} multilocalizing proteins")
 
 # histograms of dataset image intensities
-plt.clf()
-fig, axs = plt.subplots(2, len(data.datasets), sharey=True)
-start_index = 0
-for i, k in enumerate(data.datasets):
-    offset = len(data.datasets[k])
-    dataset = data.datasets[k].samples[start_index : start_index + offset] # TODO
-    start_index += offset
+def median(x): return np.median(x)
+def mean(x): return np.mean(x)
+def var(x): return np.var(x)
+stats = [median, mean, var]
+for stat in stats:
+    plt.clf()
+    fig, axs = plt.subplots(1, len(data.datasets), sharex=True, sharey=True)
+    fig.suptitle(f'{stat.__name__} Intensity Histograms (PMF)')
+    start_index = 0
+    for i, k in enumerate(data.datasets):
+        offset = len(data.datasets[k])
+        dataset = data.datasets[k].samples[start_index : start_index + offset] # TODO
+        start_index += offset
 
-    mean_intensities = []
-    var_intensities = []
-    for sample in dataset:
-        mean_intensities.append(sample['image'].mean())
-        var_intensities.append(sample['image'].var())
+        intensities = []
+        for sample in dataset:
+            intensities.append(stat(sample['image']))
 
-    axs[0][i].hist(mean_intensities, bins=10, density=True)
-    axs[0][i].title.set_text(f"{k} Intensity Mean Histogram")
-    axs[1][i].hist(var_intensities, bins=10, density=True)
-    # axs[1][i].title.set_text(f"{k} Intensity Var Histogram")
+        intensities = np.asarray(intensities)
+        intensities = (intensities + 1) / 2 # normalize to [0, 1]
+        axs[i].hist(intensities, bins=10, density=True)
+        axs[i].title.set_text(k)
 
-plt.savefig(os.path.join(logdir, 'intensity_histograms.png'))
+    plt.savefig(os.path.join(logdir, f'{stat.__name__}_intensity_histograms.png'))
