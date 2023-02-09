@@ -4,6 +4,10 @@
 # TODO and so that they all just deal with the dataset structure or external defined datatypes
 # TODO use the streaming module instead of loading into memory?
 # TODO protein names contain a list of them and their isoforms, so they are brittle to lookup by other names
+# TODO add metrics on the other input data as well? Like for the cell line and protein encoding?
+
+# TODO: Classes for datasets with methods to analyze them
+# TODO: Classes for datasets that are constructed using another one have constructors made accordingly
 
 import os
 import sys
@@ -15,52 +19,20 @@ import itertools
 import numpy as np
 import prettyprinter as pp
 from collections import Counter
-from omegaconf import OmegaConf
 import matplotlib.pyplot as plt
 from scipy.special import kl_div
-from pytorch_lightning import seed_everything
 from pytorch_lightning.trainer import Trainer
 
-from main import get_parser, instantiate_from_config
-from dataset_utils import printTab
+from main import instantiate_from_config
+from dataset_utils import load_config, printTab
 
-
-now = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-
-# add cwd for convenience
-sys.path.append(os.getcwd())
-
-parser = get_parser()
-parser = Trainer.add_argparse_args(parser)
-
-opt, unknown = parser.parse_known_args()
-
-# setup logging environment
-if opt.name:
-    name = "_" + opt.name
-elif opt.base:
-    cfg_fname = os.path.split(opt.base[0])[-1]
-    cfg_name = os.path.splitext(cfg_fname)[0]
-    name = "_" + cfg_name
-else:
-    name = ""
-
-nowname = now + name + opt.postfix
-logdir = os.path.join(opt.logdir, nowname)
-
-ckptdir = os.path.join(logdir, "checkpoints")
-cfgdir = os.path.join(logdir, "configs")
-seed_everything(opt.seed)
-
-# Get config
-configs = [OmegaConf.load(cfg) for cfg in opt.base]
-cli = OmegaConf.from_dotlist(unknown)
-config = OmegaConf.merge(*configs, cli)
+config, opt, log_dir = load_config()
 
 # setup logger to send output to file
 if opt.dev:
     logdir = os.path.join(opt.logdir, "dataset_explorer_dev")
 else:
+    now = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     logdir = os.path.join(opt.logdir, f"dataset_{config.data['name']}_{now}")
 log_file = os.path.join(logdir, f"dataset_explorer.log")
 os.makedirs(os.path.dirname(log_file), exist_ok=opt.dev)
@@ -144,7 +116,7 @@ for k in data_profile.keys(): # for each dataset
         total[c] = total[c] | set(data_profile[k][c].keys())
 
 for c in common:
-    prop_shared = common[c] / total[c]
+    prop_shared = len(common[c]) / len(total[c])
     print(f"{common[c]} of {total[c]} classes in {c}, or {str(round(100 * prop_shared, 2))}: {len(common[c])}")
     for v in common[c]:
         # TODO: denominator should be updated to exclude nans
