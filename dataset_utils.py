@@ -83,20 +83,58 @@ class DatasetExplorer:
         self.data.prepare_data()
         self.data.setup()
         self.logdir = logdir
+        self.profiles = None
+        self.features = None
     
     def __iter__(self):
         return DatasetIterator(self.data.datasets)
 
+    # returns list[dataset_names] to index into profiles
     def dataset_names(self):
         return list(self.data.datasets.keys())
 
-    def get_profile(self, features):
+    # returns list[DatasetProfile]
+    def get_profiles(self, features):
+        self.features = [feature_name for feature_name, _ in features]
         self.profiles = {}
         for dataset_name, samples in self:
             class_name = self.data.datasets[dataset_name].__class__.__name__
             print(f"{dataset_name}, {class_name}, {len(samples)}")
-            self.profiles[dataset_name] = DataProfile(samples, features, self.logdir)
+            self.profiles[dataset_name] = FeatureCountProfile(samples, features, self.logdir)
         return self.profiles
+    
+    # returns dict{features : set(labels)}
+    def get_common_labels(self):
+        if self.profiles is None:
+            raise ValueError("Must call get_profiles first")
+        common = {}
+        for feature in self.features:
+            feature_labels = [set(profile.label_list(feature)) for profile in self.profiles.values()]
+            common[feature] = set.intersection(*feature_labels)
+        return common
+    
+    # returns dict{features : set(labels)}
+    def get_total_labels(self):
+        if self.profiles is None:
+            raise ValueError("Must call get_profiles first")
+        total = {}
+        for feature in self.features:
+            feature_labels = [set(profile.label_list(feature)) for profile in self.profiles.values()]
+            total[feature] = set.union(*feature_labels)
+        return total
+
+    def get_feature_pmf(self, dataset, feature, labels, smoothing):
+        counts = [self.profiles[dataset].get_feature(feature)[label] for label in labels[feature]]
+        pmf = np.asarray(counts) + smoothing * len(self.data.datasets[dataset])
+        norm_pmf = pmf / np.sum(pmf)
+        return norm_pmf
+        
+
+    def kl_div(self, dataset_p, dataset_q, feature, smoothing):
+        labels = self.get_total_labels()
+        ps = self.get_feature_pmf(dataset_p, feature, labels, smoothing)
+        qs = self.get_feature_pmf(dataset_q, feature, labels, smoothing)
+        return np.sum(kl_div(ps, qs))
 
 class DatasetIterator:
     def __init__(self, datasets):
@@ -123,13 +161,13 @@ class DatasetIterator:
 
         return dataset_name, samples
 
-class DataProfile:
+class FeatureCountProfile:
     # features at a label for that statistic and a function that takes
     # a list of samples and returns that statistic
     def __init__(self, samples, features, logdir):
         self.prof = {}
         for feature_name, get_feature in features:
-            self.prof[feature_name] = DataProfile.get_counts(get_feature, samples)
+            self.prof[feature_name] = FeatureCountProfile.get_counts(get_feature, samples)
         self.logdir = logdir
     
     def get_counts(extract_func, samples):
@@ -160,6 +198,9 @@ class DataProfile:
 
     # passing features manually most places so it is forwards compatibile
     # if we don't care about some of the features later on
+    # features is the original 
+    # TODO: feel like this feature passing interface might be more confusing
+    # TODO: maybe manage the list of features in the DatasetExplorer
     def plot_profile(self, features, filename):
         plt.clf()
         fig, axs = plt.subplots(1, len(features))
@@ -169,3 +210,12 @@ class DataProfile:
             axs[i].hist(counts, bins=10, density=True)
             axs[i].title.set_text(feature)
         plt.savefig(os.path.join(self.logdir, f'{filename}.png'))
+    
+    # feature is the string label
+    # really for use by the DatasetExplorer
+    # TODO: feel like this feature passing interface might be more confusing
+    def label_list(self, feature):
+        return list(self.prof[feature].keys())
+
+    def get_feature(self, feature):
+        return self.prof[feature]

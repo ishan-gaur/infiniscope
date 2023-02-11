@@ -12,17 +12,8 @@
 
 import os
 import sys
-import csv
-import copy
-import itertools
-import numpy as np
-import prettyprinter as pp
-from collections import Counter
 import matplotlib.pyplot as plt
-from scipy.special import kl_div
-from pytorch_lightning.trainer import Trainer
-
-from dataset_utils import DatasetExplorer, DataProfile
+from dataset_utils import DatasetExplorer
 from dataset_utils import load_config, allocate_logdir, printTab
 
 
@@ -56,7 +47,7 @@ profile_features = [
 ]
 
 # Retrieve protein, cell_line, and location counts
-profiles = data_exp.get_profile(profile_features)
+profiles = data_exp.get_profiles(profile_features)
 for dataset, profile in profiles.items():
     print(f"\nDataset: {dataset}")
     for feature, _ in profile_features:
@@ -66,91 +57,64 @@ for dataset, profile in profiles.items():
     profile.write_to_csv(profile_features, dataset)
 
 
-# # calculate counts of common proteins, cell-lines, and localizations between datasets
-# # for each dataset, get the intersection of proteins, cell-lines, and localizations
-# common = copy.deepcopy(data_profile[dataset_name])
-# total = {_k: set(v.keys()) for _k, v in data_profile[dataset_name].items()}
-# for k in data_profile.keys(): # for each dataset
-#     for c in common: # count of proteins, cell-lines, and localizations
-#         common[c] = common[c] & data_profile[k][c]
-#         total[c] = total[c] | set(data_profile[k][c].keys())
+# calculate counts of common proteins, cell-lines, and localizations between datasets
+# for each dataset, get the intersection of proteins, cell-lines, and localizations
+# express them as percent shared out of total and for each dataset's set of classes
+common = data_exp.get_common_labels()
+total = data_exp.get_total_labels()
 
-# for c in common:
-#     prop_shared = len(common[c]) / len(total[c])
-#     print(f"{common[c]} of {total[c]} classes in {c}, or {str(round(100 * prop_shared, 2))}: {len(common[c])}")
-#     for v in common[c]:
-#         # TODO: denominator should be updated to exclude nans
-#         common[c][v] = [common[c][v] / len(data.datasets[k]) for k in data_profile.keys()]
+for feature in common:
+    prop_shared = len(common[feature]) / len(total[feature])
+    print(f"\nFeature {feature} has {str(round(100 * prop_shared, 2))}% shared across dataset out of {len(total[feature])} total.")
+    for dataset in data_exp.dataset_names():
+        feature_counts = profiles[dataset].get_feature(feature)
+        prop_dataset = len(common[feature]) / len(feature_counts)
+        printTab(f"{dataset} shares {str(round(100 * prop_dataset, 2))}% of {feature} with the rest of the dataset.")
 
-# # convert counts to percentages of each dataset
-# for label in common:
-#     for k, counts in common[label].items():
-#         common[label][k] = [str(round(100 * count, 1)) + "%" for count in counts]
+# report KL-divergence between attribute distributions
+# need ps to get list across all keys, not just those present in one dataset or the other
+div_smoothing = {feature: [] for feature, _ in profile_features}
+smoothing_range = [0.1 ** i for i in range(0, 10)]
+for smoothing in smoothing_range:
+    for feature in div_smoothing:
+        # TODO: way to do this programatically? for train and validation?
+        div_smoothing[feature].append(data_exp.kl_div('validation', 'train', feature, smoothing))
 
-# pp.pprint(common)
-
-# # report KL-divergence between attribute distributions
-# # need ps to get list across all keys, not just those present in one dataset or the other
-# div_smoothing = {attr: [] for attr in total}
-# smoothing_range = [0.1 ** i for i in range(0, 10)]
-# for smoothing in smoothing_range:
-#     ps = {k: {attr: [] for attr in data_profile[k]} for k in data_profile}
-#     # todo sep KL by attribute
-#     for k in data.datasets:
-#         for attribute in total:
-#             for classname in total[attribute]:
-#                 ps[k][attribute].append(data_profile[k][attribute][classname])
-#             ps[k][attribute] = np.asarray(ps[k][attribute]) + len(data.datasets[k]) * smoothing
-#             norm = np.sum(ps[k][attribute])
-#             ps[k][attribute] /= norm 
-
-#     combos = list(itertools.combinations(data.datasets.keys(), 2))
-#     for combo in combos:
-#         if smoothing == smoothing_range[2]: # turns out the exponent op on floats is imprecise
-#             print(f"KL-divergence per feature for {combo[1]} and {combo[0]}:")
-#         for attribute in total: # TODO: save these key lists into specially named things
-#             div = np.sum(kl_div(ps[combo[1]][attribute], ps[combo[0]][attribute]))
-#             div_smoothing[attribute].append(div) # only while two datasets
-#             if smoothing == smoothing_range[2]:
-#                 print(f"\t{attribute}: {div}")
-
-# # plot line graph of KL-divergence per feature as smoothing varies
-# plt.clf()
-# fig, axs = plt.subplots(1, len(div_smoothing))
-# fig.suptitle('KL-divergence per feature as smoothing varies')
-# for i, attribute in enumerate(div_smoothing):
-#     axs[i].set_title(attribute)
-#     axs[i].plot(smoothing_range, div_smoothing[attribute])
-#     axs[i].set_xscale('log')
-# plt.savefig(os.path.join(logdir, f'kl_divergence.png'))
+# plot line graph of KL-divergence per feature as smoothing varies
+plt.clf()
+fig, axs = plt.subplots(1, len(div_smoothing))
+fig.suptitle('KL-divergence per feature as smoothing varies')
+for i, attribute in enumerate(div_smoothing):
+    axs[i].set_title(attribute)
+    axs[i].plot(smoothing_range, div_smoothing[attribute])
+    axs[i].set_xscale('log')
+plt.savefig(os.path.join(logdir, f'kl_divergence.png'))
 
 
-# # get the localizations of each protein
-# protein_localizations = {}
-# start_index = 0
-# for k in data.datasets:
-#     offset = len(data.datasets[k])
-#     dataset = data.datasets[k].samples[start_index : start_index + offset] # TODO: All the samples in data are in a single array
-#     start_index += offset
-    
-#     for sample in dataset:
-#         sample_type = sample['caption'].split('/')
-#         sample_type[2] = sample_type[2].split(',')
-#         if sample_type[0] not in protein_localizations:
-#             protein_localizations[sample_type[0]] = set()
-#         protein_localizations[sample_type[0]].update(sample_type[2])
+# TODO: maybe we should just make lists and filter/match things later
+# like this workflow below doesn't fit easily into the profile structure
+# get the localizations of each protein
+# TODO: could add an option for counts or just dictionary rule or smthg
+protein_localizations = {}
+for dataset, samples in data_exp:
+    for sample in samples:
+        prot = get_protein(sample)[0]
+        loc = get_location(sample)[0]
+        if prot not in protein_localizations:
+            protein_localizations[prot] = set()
+        protein_localizations[prot].update(loc)
 
-# # count the number of localizations for each protein
-# protein_localization_counts = {}
-# for protein, localizations in protein_localizations.items():
-#     protein_localization_counts[protein] = len(localizations)
+# count the number of localizations for each protein
+protein_localization_counts = {}
+for protein, localizations in protein_localizations.items():
+    protein_localization_counts[protein] = len(localizations)
 
-# # plot counts of localizations for each protein
-# plt.clf()
-# x = protein_localization_counts.values()
-# plt.hist(x, bins=10)
-# plt.title("Protein Localization Counts")
-# plt.savefig(os.path.join(logdir, 'protein_localization_counts.png'))
+# plot counts of localizations for each protein
+plt.clf()
+x = protein_localization_counts.values()
+plt.hist(x, bins=10)
+plt.title("Protein Localization Counts")
+plt.savefig(os.path.join(logdir, 'protein_localization_counts.png'))
 
 # # print protein localization counts by dataset
 # for k in data_profile:
