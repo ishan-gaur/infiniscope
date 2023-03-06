@@ -17,7 +17,7 @@ from pytorch_lightning.trainer import Trainer
 from torchvision.utils import save_image
 
 from main import get_parser, instantiate_from_config
-from dataset_features import expand_feature
+from dataset_features import expand_feature, get_features
 
 
 def load_config():
@@ -80,7 +80,10 @@ def allocate_logdir(config, opt):
 # if there is a list of column names, need to iterate through the extracted values and add them
 # TODO: need to be able to get the dataset without the config? Intent with that was so you can just pass in the config
 # you're using for experiments. Not sure how useful that really is.
-def HPAToPandas(config, features, expand=None):
+def HPAToPandas(config, features, expand=None, cache=False, logdir=None):
+    if expand is not None and expand not in ["common", "total"]:
+        raise ValueError("expand must be either 'common' or 'total'")
+
     data_explorer = DatasetExplorer(config)
 
     datasets = {}
@@ -88,7 +91,8 @@ def HPAToPandas(config, features, expand=None):
     for dataset_name, samples in data_explorer:
         data_features = []
         for sample in samples:
-            data_features.append([f.get_feature(sample) for f in features])
+            log_home = "/".join(logdir.split('/')[:-1])
+            data_features.append(get_features(sample, features, cache=cache, logdir=log_home))
 
         datasets[dataset_name] = pd.DataFrame(data_features, columns=column_names)
 
@@ -130,6 +134,7 @@ def get_common_features(datasets, features, logdir=None):
             json.dump(common_write, f)
     return common
 
+
 def get_total_features(datasets, features, logdir=None):
     total = {
         feature.name:
@@ -163,27 +168,6 @@ def get_counts(datasets, features):
     return counts
 
 
-# Plot histograms of the features requested from the counts
-def plot_profile(features, counts, filename, logdir):
-    plt.clf()
-    # features = [f for f in features if f.countable]
-    features = list(filter(lambda f: f.countable, features))
-    fig, axs = plt.subplots(1, len(features))
-    fig.suptitle('Histograms of Feature Counts')
-    for i, feature in enumerate(features):
-        axs[i].hist(counts[feature.name].values(), bins=10, density=True)
-        axs[i].title.set_text(feature.name)
-    plt.savefig(os.path.join(logdir, f'{filename}.png'))
-
-
-def view_top_k_images(dataset, filename, logdir, k=10):
-    images = []
-
-def printTab(*args):
-    args = ("\t",)+args
-    print(*args)
-
-
 # Helper for features that contain lists of the actual data instances that want to be accessed
 def instances(data, expandLists=False):
     if type(data[0]) == list and not expandLists:
@@ -195,6 +179,15 @@ def instances(data, expandLists=False):
     else: 
         instances = data
     return instances
+
+
+def view_top_k_images(dataset, filename, logdir, k=10):
+    images = []
+
+
+def printTab(*args):
+    args = ("\t",)+args
+    print(*args)
 
 
 class DatasetExplorer:
@@ -260,6 +253,7 @@ class DatasetExplorer:
         # ps = self.get_feature_pmf(dataset_p, feature, labels, smoothing)
         # qs = self.get_feature_pmf(dataset_q, feature, labels, smoothing)
         # return np.sum(kl_div(ps, qs))
+
 
 class DatasetIterator:
     def __init__(self, datasets):
