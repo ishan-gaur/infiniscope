@@ -75,9 +75,9 @@ location = Feature("Location", get_location, True, True)
 # Just maintains a picked pandas dataframe so loading speed/size might become a bottle neck
 # If it really gets too big, we would need to use a database and expose it as a service maybe
 # TODO: do all samples together
-def get_features(sample, features, cache, logdir):
+def get_features(samples, features, cache, logdir):
     if not cache:
-        return [f.get_feature(sample) for f in features]
+        return [{f.name: f.get_feature(sample) for f in features} for sample in samples]
 
     if logdir is None:
         raise ValueError("logdir must be specified if cache is True")
@@ -91,6 +91,21 @@ def get_features(sample, features, cache, logdir):
     if os.path.exists(cache_path):
         df = pd.read_pickle(cache_path)
 
+    sample_features = []
+    changed = False
+    for sample in samples:
+        feature_values, sample_changed, df = retrieve_from_cache(sample, features, df)
+        sample_features.append(feature_values)
+        changed |= sample_changed
+
+    if changed:
+        with open(cache_path, "wb") as f:
+            df.to_pickle(f)
+
+    return sample_features
+
+
+def retrieve_from_cache(sample, features, df):
     feature_values = {}
     key = img_hash.get_feature(sample)
     changed = False
@@ -117,8 +132,4 @@ def get_features(sample, features, cache, logdir):
                 df.drop(df[img_hash.name] == key, inplace=True)
                 df = df.append(feature_values, ignore_index=True)
 
-    if changed:
-        with open(cache_path, "wb") as f:
-            df.to_pickle(f)
-
-    return feature_values
+    return feature_values, changed, df
