@@ -5,7 +5,11 @@ from collections import namedtuple
 import mahotas as mt
 import pandas as pd
 import hashlib
-from collections.abc import Iterable
+from PIL import Image
+from torchvision.utils import make_grid
+import torch
+import hpacellseg.cellsegmentator as cellsegmentor
+from hpacellseg.utils import label_cell, label_nuclei
 
 # name of the feature: index you want in the pandas dataframe
 # get_feature: function that takes a sample from a dataset and returns the feature
@@ -42,6 +46,15 @@ def get_image_haralick(sample):
 def get_image(sample):
     return sample['image']
 
+def get_4_channel_image(sample):
+    poi = sample['image'][:, :, 1].reshape(256, 256, 1)
+    return np.concatenate((poi, sample['ref-image']), axis=2)
+
+def get_ref_channel_image(sample):
+    return sample['ref-image']
+
+get_image = get_4_channel_image
+
 def get_image_hash(sample):
     image_hash = hashlib.sha1(get_image(sample).tobytes()).hexdigest()
     return image_hash
@@ -54,6 +67,41 @@ def get_cell_line(sample):
 
 def get_location(sample):
     return sample['caption'].split('/')[2].split(',')
+
+def get_segmented_cells(samples):
+    # torch.nn.Module.dump_patches = True
+    segmentor = cellsegmentor.CellSegmentator(
+        # recommended 0.25; our samples are already downsized by 0.125
+        scale_factor=2,
+        # NOTE: setting padding=True seems to solve most issues that have been encountered
+        #       during our single cell Kaggle challenge.
+        device="cpu",
+        padding=True,
+        multi_channel_model=True
+    )
+
+    bulk_imgs = [normalized_to_uint8(get_ref_channel_image(sample)) for sample in samples]
+    nuc_segmentations = segmentor.pred_nuclei(bulk_imgs)
+    # images = torch.stack(bulk_imgs).permute(1, 0, 2, 3)
+    # cell_prediction_input = []
+    # for channel in images:
+    #     cell_prediction_input.append([image for image in channel])
+    # cell_segmentations = segmentor.pred_cells(cell_prediction_input)
+    # bulk_imgs = [img.permute(1, 2, 0) for img in bulk_imgs]
+    cell_segmentations = segmentor.pred_cells(bulk_imgs, precombined=True)
+    masks = [label_cell(nuc, cell) for nuc, cell in zip(nuc_segmentations, cell_segmentations)]
+
+    nuc_masks, cell_masks = [], []
+    for i in range(len(masks)):
+        nuc_masks.append([])
+        cell_masks.append([])
+        for k in range(1, 1 + masks[i][0].max()):
+            nuc_masks[i].append((masks[i][0] == k).reshape(256, 256, 1) * bulk_imgs[i])
+            cell_masks[i].append((masks[i][1] == k).reshape(256, 256, 1) * bulk_imgs[i])
+            nuc_masks[i][-1] = torch.from_numpy(nuc_masks[i][-1])
+            cell_masks[i][-1] = torch.from_numpy(cell_masks[i][-1])
+
+    return cell_masks, nuc_masks
 
 image = Feature("Image", get_image, False, False)
 img_hash = Feature("Image Hash", get_image_hash, False, False)
@@ -75,7 +123,7 @@ location = Feature("Location", get_location, True, True)
 # Just maintains a picked pandas dataframe so loading speed/size might become a bottle neck
 # If it really gets too big, we would need to use a database and expose it as a service maybe
 # TODO: do all samples together
-def get_features(samples, features, cache, logdir):
+def get_features(samples, features, cache, logdir, debug_count=4, dataset_name=""): #, debugging=[image_sampler, segmentation_sampler]):
     if not cache:
         return [{f.name: f.get_feature(sample) for f in features} for sample in samples]
 
@@ -85,7 +133,8 @@ def get_features(samples, features, cache, logdir):
     if img_hash not in features:
         raise ValueError("Image hash must be in features to lookup cache entries.")
 
-    cache_path = os.path.join(logdir, "feature_cache.pkl")
+    log_home = "/".join(logdir.split('/')[:-1])
+    cache_path = os.path.join(log_home, "feature_cache.pkl")
 
     df = pd.DataFrame(columns=[f.name for f in features])
     if os.path.exists(cache_path):
@@ -97,6 +146,15 @@ def get_features(samples, features, cache, logdir):
         feature_values, sample_changed, df = retrieve_from_cache(sample, features, df)
         sample_features.append(feature_values)
         changed |= sample_changed
+
+    images = [torch.from_numpy(get_image(sample)) for sample in samples[:debug_count]]
+    plot_image_sample(images, dataset_name, logdir, force_rgb=True)
+
+    # full_images = [torch.from_numpy(get_4_channel_image(sample)) for sample in samples[:debug_count]]
+    # plot_image_sample(full_images, dataset_name, logdir)
+
+    cell_masks, nuc_masks = get_segmented_cells(samples[:debug_count])
+    plot_segmented_cells(cell_masks, nuc_masks, images, dataset_name, logdir)
 
     if changed:
         with open(cache_path, "wb") as f:
@@ -133,3 +191,77 @@ def retrieve_from_cache(sample, features, df):
                 df = df.append(feature_values, ignore_index=True)
 
     return feature_values, changed, df
+
+def cmyk_to_rgb(img, chw=True):
+    if not chw:
+        return NotImplementedError("Only implemented for chw")
+    rgb_img = torch.zeros((3, img.shape[1], img.shape[2]))
+    # first change the image to the desired RGB colors
+    # then change the encoding
+    # key should become blue
+    # cyan should become green
+    # yellow should stay yellow
+    # magenta should become red
+    translated = torch.zeros_like(img)
+    translated[0] = (img[3] + img[0]) / 2
+    translated[1] = (img[3] + img[1]) / 2
+    translated[2] = (img[0] + img[1] + img[2]) / 3
+    translated[3] = -1 * torch.sum(img, dim=0) / 4
+    # convert translated from cmyk to rgb
+    rgb_img[0] = translated[1] + translated[2]
+    rgb_img[1] = translated[0] + translated[2]
+    rgb_img[2] = translated[0] + translated[1]
+    return rgb_img
+
+
+# Primarily for debugging things like segmentation, etc.
+# Will be called from feature methods that work on these images
+def plot_image_sample(images, dataset_name, logdir, force_rgb=False):
+    # images start: 256 X 256 X 3: h,w,c
+    num_channels = images[0].shape[2]
+    img_path = os.path.join(logdir, f'{dataset_name}_sample.tiff')
+    grid_images = []
+    for image in images:
+        img = image.permute(2, 0, 1)
+        for i in range(num_channels):
+            next_channel = torch.zeros_like(img) - 1
+            next_channel[i] = img[i]
+            if force_rgb:
+                next_channel = cmyk_to_rgb(next_channel)
+            grid_images.append(next_channel)
+        if force_rgb:
+            img = cmyk_to_rgb(img)
+        grid_images.append(img)
+    grid = make_grid(grid_images, nrow=num_channels + 1, normalize=True)
+    grid = grid.permute(1, 2, 0)  # c,h,w -> h,w,c
+    grid = grid.numpy()
+    # grid = np.where(grid == 0, 1, grid)
+    grid = normalized_to_uint8(grid)
+    Image.fromarray(grid, "RGB" if num_channels == 3 or force_rgb else "CMYK").save(img_path)
+
+def plot_segmented_cells(cell_masks, nuc_masks, images, dataset_name, logdir):
+    # images start: 256 X 256 X 3: h,w,c
+    max_cells = max([len(cells) for cells in cell_masks])
+    img_path = os.path.join(logdir, f'{dataset_name}_segmented.tiff')
+    grid_images = []
+    assert len(images) == len(cell_masks)
+    assert len(nuc_masks) == len(cell_masks)
+    images = [255 * (image[:, :, 1:] + 1) / 2 for image in images]
+    blank = torch.zeros_like(images[0]) - 1
+    for i in range(len(images)):
+        grid_images.append(images[i].permute(2, 0, 1))
+        for j in range(max_cells):
+            next_img = cell_masks[i][j] if j < len(cell_masks[i]) else blank
+            next_img = next_img.permute(2, 0, 1)
+            grid_images.append(next_img)
+        grid_images.append(blank.permute(2, 0, 1))
+        for j in range(max_cells):
+            next_img = nuc_masks[i][j] if j < len(nuc_masks[i]) else blank
+            next_img = next_img.permute(2, 0, 1)
+            grid_images.append(next_img)
+    grid = make_grid(grid_images, nrow=1 + max_cells, normalize=True)
+    grid = grid.permute(1, 2, 0)  # c,h,w -> h,w,c
+    grid = grid.numpy()
+    # grid = np.where(grid == 0, 1, grid)
+    grid = normalized_to_uint8(grid)
+    Image.fromarray(grid, "RGB").save(img_path)

@@ -62,4 +62,3 @@ def plot_profile(features, counts, filename, logdir):
         axs[i].hist(counts[feature.name].values(), bins=10, density=True)
         axs[i].title.set_text(feature.name)
     plt.savefig(os.path.join(logdir, f'{filename}.png'))
-

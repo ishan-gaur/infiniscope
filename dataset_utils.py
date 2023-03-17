@@ -89,11 +89,10 @@ def HPAToPandas(config, features, expand=None, cache=False, logdir=None):
     datasets = {}
     column_names = [feature.name for feature in features]
     for dataset_name, samples in data_explorer:
-        log_home = "/".join(logdir.split('/')[:-1])
-        data_features = get_features(samples, features, cache=cache, logdir=log_home)
-
+        data_features = get_features(samples, features, cache=cache, logdir=logdir, dataset_name=dataset_name)
         datasets[dataset_name] = pd.DataFrame.from_dict(data_features, orient="columns")
 
+    # TODO factor out the expansion logic to a separate function
     if expand is None:
         return datasets
 
