@@ -66,63 +66,80 @@ def plot_profile(features, counts, filename, logdir):
     for i, feature in enumerate(features):
         axs[i].hist(counts[feature.name].values(), bins=10, density=True)
         axs[i].title.set_text(feature.name)
+    plt.tight_layout()
     plt.savefig(os.path.join(logdir, f'{filename}.png'))
 
 
-def plot_conditional_dist(pred_feature, cond_feature, datasets, source_data, target_data,
-                          logdir, smoothing=1, summary='histogram', bins=5):
+def get_feature_values(feature, dataset, filter):
+    try:
+        V = np.concatenate(
+            dataset[feature.name][filter].values.tolist()
+        )
+    except ValueError:
+        V = np.concatenate([
+            dataset[feature.name][filter].values.tolist()
+        ])
+    return V
+
+
+def plot_conditional_dist(pred_feature, cond_feature, datasets, source_data, target_data, prior,
+                          logdir, summary='histogram', dims=None, bins=5, sample_size=None):
     common = get_common_features({source_data: datasets[source_data], target_data: datasets[target_data]}, [cond_feature])
     kl_divs = {pred_feature.name:[], "kl_div": []}
-    Ps, Qs = [], []
     df = pd.DataFrame()
+
     for feature in common[cond_feature.name]:
         # combine the lists of pred_feature values for the current feature
-        Q = np.concatenate(
-            datasets[source_data][
-                datasets[source_data][cond_feature.name] == feature
-            ][pred_feature.name].values.tolist()
-        )
-        P = np.concatenate(
-            datasets[target_data][
-                datasets[target_data][cond_feature.name] == feature
-            ][pred_feature.name].values.tolist()
-        )
-        if Q.shape[0] < 100:
-            continue
+        indices = None
+        if not cond_feature.multiple:
+            source_indices = datasets[source_data][cond_feature.name] == feature
+            target_indices = datasets[target_data][cond_feature.name] == feature
+        else:
+            lookup_feature = expand_feature(cond_feature, feature)
+            source_indices = datasets[source_data][lookup_feature] == 1
+            target_indices = datasets[target_data][lookup_feature] == 1
+
+        Q = get_feature_values(pred_feature, datasets[source_data], source_indices)
+        P = get_feature_values(pred_feature, datasets[target_data], target_indices)
+
+        if dims is None:
+            dims = 1 if Q[0].ndim == 0 else Q[0].ndim
+        if len(Q.shape) == 1:
+            Q = Q.reshape(-1, 1)
+            P = P.reshape(-1, 1)
+        Q = Q[:, :dims].reshape(-1, dims)
+        P = P[:, :dims].reshape(-1, dims)
+
+        # TODO: this is a hack so far
         df = df.append([{cond_feature.name: feature, "dataset": source_data, pred_feature.name: q} for q in Q[:, 0]])
         df = df.append([{cond_feature.name: feature, "dataset": target_data, pred_feature.name: p} for p in P[:, 0]])
-        Qs.append(Q)
-        Ps.append(P)
-        # get 2D histogram counts of the values
-        # TODO: this needs to be generalized based on the dimensionality of the data
-        # worst case might have to do all of this through a umap for the summary??
-        # the bucketing should also be a customizable parameter
-        # TODO: use np.histogramdd and have a user defined prior
+
         # TODO: maybe these functions can be separated
-        dims = 2
-        smooth_x = np.linspace(0, 1, bins)
-        smooth_y = 1 - smooth_x
-        smooth_x = np.append(np.concatenate([smooth_x] * smoothing), [0] * smoothing)
-        smooth_y = np.append(np.concatenate([smooth_y] * smoothing), [0] * smoothing)
         # sample elements of P and Q to get a better estimate of the KL divergence
-        sample_size = 64
+        if sample_size is None:
+            sample_size = (bins + 1) ** (dims + 1)
+
+        print(Q.shape[0])
+        if Q.shape[0] < 2 * sample_size:
+            continue
+
         for _ in range(30):
-            # Px, Py = np.concatenate([P[:, 0], smooth_x]), np.concatenate([P[:, 1], smooth_y])
             P_sample = P[np.random.choice(P.shape[0], size=sample_size, replace=True)]
             Q_sample = Q[np.random.choice(Q.shape[0], size=sample_size, replace=True)]
-            Px, Py = np.concatenate([P_sample[:, 0], smooth_x]), np.concatenate([P_sample[:, 1], smooth_y])
-            P_hist, _, _ = np.histogram2d(Px, Py, bins=5, density=True)
+            P_i = np.swapaxes(np.array([np.concatenate([P_sample[:, i], prior[i]]) for i in range(dims)]), 0, 1)
+            Q_i = np.swapaxes(np.array([np.concatenate([Q_sample[:, i], prior[i]]) for i in range(dims)]), 0, 1)
+
+            P_hist, _ = np.histogramdd(P_i, bins=bins, density=True)
             P_hist /= P_hist.sum()
-            # Qx, Qy = np.concatenate([Q[:, 0], smooth_x]), np.concatenate([Q[:, 1], smooth_y])
-            Qx, Qy = np.concatenate([Q_sample[:, 0], smooth_x]), np.concatenate([Q_sample[:, 1], smooth_y])
-            Q_hist, _, _ = np.histogram2d(Qx, Qy, bins=5, density=True)
+            Q_hist, _ = np.histogramdd(Q_i, bins=bins, density=True)
             Q_hist /= Q_hist.sum()
-            # compute kl divergence
+
             kl = np.sum(kl_div(P_hist, Q_hist))
             if math.isinf(kl):
-                continue
+                raise ValueError("KL divergence is infinite.")
             kl_divs[pred_feature.name].append(feature)
             kl_divs["kl_div"].append(kl)
+
     kl_df = pd.DataFrame(kl_divs)
 
     plt.clf()
@@ -132,7 +149,7 @@ def plot_conditional_dist(pred_feature, cond_feature, datasets, source_data, tar
         plt.clf()
         sns.violinplot(data=df, x=cond_feature.name, y=pred_feature.name, hue="dataset", split=True)
         plt.tight_layout()
-    plt.savefig(os.path.join(logdir, f'Q={source_data},P={target_data}.png'))
+    plt.savefig(os.path.join(logdir, f'Q={source_data},P={target_data}_{pred_feature.name}|{cond_feature.name}_{summary}.png'))
 
     # plot bar chart from kl_divs dictionary
     plt.clf()

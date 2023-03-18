@@ -50,15 +50,24 @@ for dataset_name, dataset in datasets.items():
     plot_haralick_umap(dataset, dataset_name, common[location.name],
         logdir, sample_size=10)
     
-plot_conditional_dist(nuc_cyto, cell_line, datasets, 'train', 'validation', logdir)
+# Get prior to smooth distribution and reduce chance of accidental infs
+bins = 5
+smoothing = 1
+smooth_x = np.linspace(0, 1, bins)
+smooth_y = 1 - smooth_x
+smooth_x = np.append(np.concatenate([smooth_x] * smoothing), [0] * smoothing)
+smooth_y = np.append(np.concatenate([smooth_y] * smoothing), [0] * smoothing)
+nuc_cyto_prior = [smooth_x, smooth_y]
 
-# for feature in common:
-#     prop_shared = len(common[feature]) / len(total[feature])
-#     print(f"\nFeature {feature} has {str(round(100 * prop_shared, 2))}% shared across dataset out of {len(total[feature])} total.")
-#     for dataset in data_exp.dataset_names():
-#         feature_counts = profiles[dataset].get_feature(feature)
-#         prop_dataset = len(common[feature]) / len(feature_counts)
-#         printTab(f"{dataset} shares {str(round(100 * prop_dataset, 2))}% of {feature} with the rest of the dataset.")
+plot_conditional_dist(nuc_cyto, cell_line, datasets, 'train', 'validation', nuc_cyto_prior, logdir, dims=1, bins=bins)
+
+# get binned histogram of intensities using a beta distribution centered at -0.5 with number of samples=bins
+# TODO: ending up just needing a uniform prior over the distribution, otherwise the KL stuff becomes ill-defined...
+# would've liked to use a beta distribution but no guarantee of covering the whole range
+# I could do it but then the total number of points I would need to sample would go up so there is an integer number in the bin with the lowest probability
+bins = 10
+int_prior = [np.linspace(-1, 1, bins)]
+plot_conditional_dist(int_mean, location, datasets, 'train', 'validation', int_prior, logdir, bins=bins, sample_size=15)
 
 # # report KL-divergence between attribute distributions
 # # need ps to get list across all keys, not just those present in one dataset or the other
@@ -68,16 +77,6 @@ plot_conditional_dist(nuc_cyto, cell_line, datasets, 'train', 'validation', logd
 #     for feature in div_smoothing:
 #         # TODO: way to do this programatically? for train and validation?
 #         div_smoothing[feature].append(data_exp.kl_div('validation', 'train', feature, smoothing))
-
-# # plot line graph of KL-divergence per feature as smoothing varies
-# plt.clf()
-# fig, axs = plt.subplots(1, len(div_smoothing))
-# fig.suptitle('KL-divergence per feature as smoothing varies')
-# for i, attribute in enumerate(div_smoothing):
-#     axs[i].set_title(attribute)
-#     axs[i].plot(smoothing_range, div_smoothing[attribute])
-#     axs[i].set_xscale('log')
-# plt.savefig(os.path.join(logdir, f'kl_divergence.png'))
 
 # # TODO: maybe we should just make lists and filter/match things later
 # # like this workflow below doesn't fit easily into the profile structure
