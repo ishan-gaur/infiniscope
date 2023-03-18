@@ -80,7 +80,7 @@ def allocate_logdir(config, opt):
 # if there is a list of column names, need to iterate through the extracted values and add them
 # TODO: need to be able to get the dataset without the config? Intent with that was so you can just pass in the config
 # you're using for experiments. Not sure how useful that really is.
-def HPAToPandas(config, features, expand=None, cache=False, logdir=None):
+def HPAToPandas(config, features, expand=None, cache=False, logdir=None, recompute=[]):
     if expand is not None and expand not in ["common", "total"]:
         raise ValueError("expand must be either 'common' or 'total'")
 
@@ -89,7 +89,7 @@ def HPAToPandas(config, features, expand=None, cache=False, logdir=None):
     datasets = {}
     column_names = [feature.name for feature in features]
     for dataset_name, samples in data_explorer:
-        data_features = get_features(samples, features, cache=cache, logdir=logdir, dataset_name=dataset_name)
+        data_features = get_features(samples, features, cache=cache, logdir=logdir, dataset_name=dataset_name, recompute=recompute)
         datasets[dataset_name] = pd.DataFrame.from_dict(data_features, orient="columns")
 
     # TODO factor out the expansion logic to a separate function

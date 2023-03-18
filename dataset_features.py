@@ -82,12 +82,6 @@ def get_segmented_cells(samples):
 
     bulk_imgs = [normalized_to_uint8(get_ref_channel_image(sample)) for sample in samples]
     nuc_segmentations = segmentor.pred_nuclei(bulk_imgs)
-    # images = torch.stack(bulk_imgs).permute(1, 0, 2, 3)
-    # cell_prediction_input = []
-    # for channel in images:
-    #     cell_prediction_input.append([image for image in channel])
-    # cell_segmentations = segmentor.pred_cells(cell_prediction_input)
-    # bulk_imgs = [img.permute(1, 2, 0) for img in bulk_imgs]
     cell_segmentations = segmentor.pred_cells(bulk_imgs, precombined=True)
     masks = [label_cell(nuc, cell) for nuc, cell in zip(nuc_segmentations, cell_segmentations)]
 
@@ -103,6 +97,19 @@ def get_segmented_cells(samples):
 
     return cell_masks, nuc_masks
 
+
+def get_nuc_cyto(sample):
+    cell_masks, nuclei_masks = get_segmented_cells([sample])
+    cell_masks = np.stack(cell_masks[0])[:, :, :, 0]
+    nuclei_masks = np.stack(nuclei_masks[0])[:, :, :, 0]
+    cyto_masks = cell_masks - nuclei_masks
+    expression_dist = np.array(list(zip(np.sum(nuclei_masks, axis=(1, 2)), np.sum(cyto_masks, axis=(1, 2)))))
+    expression_dist = expression_dist / np.sum(cell_masks, axis=(1, 2)).reshape(-1, 1)
+    if np.isnan(expression_dist.flatten()).any():
+        expression_dist[np.isnan(expression_dist)] = 0
+    return expression_dist
+
+
 image = Feature("Image", get_image, False, False)
 img_hash = Feature("Image Hash", get_image_hash, False, False)
 int_mean = Feature("Intensity Mean", get_intensity_mean, False, False)
@@ -111,6 +118,8 @@ img_haralick = Feature("Haralick Features", get_image_haralick, False, False)
 protein = Feature("Protein", get_protein, True, False) # arguable, but too many proteins to one-hot encode
 cell_line = Feature("Cell Line", get_cell_line, True, False)
 location = Feature("Location", get_location, True, True)
+nuc_cyto = Feature("Nuclei & Cytoplasm Expression", get_nuc_cyto, False, False)
+
 
 # TODO: untested as far as missing/features
 # Tested on missing images from the cache
@@ -122,8 +131,7 @@ location = Feature("Location", get_location, True, True)
 # TODO: needs a command to refresh cache, for example if feature code was wrong
 # Just maintains a picked pandas dataframe so loading speed/size might become a bottle neck
 # If it really gets too big, we would need to use a database and expose it as a service maybe
-# TODO: do all samples together
-def get_features(samples, features, cache, logdir, debug_count=4, dataset_name=""): #, debugging=[image_sampler, segmentation_sampler]):
+def get_features(samples, features, cache, logdir, debug_count=4, dataset_name="", recompute=[]): #, debugging=[image_sampler, segmentation_sampler]):
     if not cache:
         return [{f.name: f.get_feature(sample) for f in features} for sample in samples]
 
@@ -143,18 +151,15 @@ def get_features(samples, features, cache, logdir, debug_count=4, dataset_name="
     sample_features = []
     changed = False
     for sample in samples:
-        feature_values, sample_changed, df = retrieve_from_cache(sample, features, df)
+        feature_values, sample_changed, df = retrieve_from_cache(sample, features, df, recompute)
         sample_features.append(feature_values)
         changed |= sample_changed
 
-    images = [torch.from_numpy(get_image(sample)) for sample in samples[:debug_count]]
-    plot_image_sample(images, dataset_name, logdir, force_rgb=True)
+    # images = [torch.from_numpy(get_image(sample)) for sample in samples[:debug_count]]
+    # plot_image_sample(images, dataset_name, logdir, force_rgb=True)
 
-    # full_images = [torch.from_numpy(get_4_channel_image(sample)) for sample in samples[:debug_count]]
-    # plot_image_sample(full_images, dataset_name, logdir)
-
-    cell_masks, nuc_masks = get_segmented_cells(samples[:debug_count])
-    plot_segmented_cells(cell_masks, nuc_masks, images, dataset_name, logdir)
+    # cell_masks, nuc_masks = get_segmented_cells(samples[:debug_count])
+    # plot_segmented_cells(cell_masks, nuc_masks, images, dataset_name, logdir)
 
     if changed:
         with open(cache_path, "wb") as f:
@@ -163,17 +168,18 @@ def get_features(samples, features, cache, logdir, debug_count=4, dataset_name="
     return sample_features
 
 
-def retrieve_from_cache(sample, features, df):
+# TODO: can store digest of the feature code in the cache to detect changes and automatically recompute
+# then we can just get rid of this recompute parameter
+def retrieve_from_cache(sample, features, df, recompute=[]):
     feature_values = {}
     key = img_hash.get_feature(sample)
     changed = False
     if key not in df[img_hash.name].values:
         feature_values = {f.name: f.get_feature(sample) for f in features}
         df = df.append(feature_values, ignore_index=True)
-        changed = True
     else:
         for f in features:
-            if f.name not in df.columns:
+            if f.name not in df.columns or f in recompute:
                 feature_values[f.name] = f.get_feature(sample)
                 changed = True
             else:
@@ -185,12 +191,13 @@ def retrieve_from_cache(sample, features, df):
                     feature_values[f.name] = f.get_feature(sample)
                     changed = True
 
-            # the below will account for new columns too
-            if changed == True:
-                df.drop(df[img_hash.name] == key, inplace=True)
-                df = df.append(feature_values, ignore_index=True)
+        # the below will account for new columns too
+        if changed == True:
+            df.drop(np.argmax([np.array(df[img_hash.name] == key)]), inplace=True)
+            df = df.append(feature_values, ignore_index=True)
 
     return feature_values, changed, df
+
 
 def cmyk_to_rgb(img, chw=True):
     if not chw:
@@ -235,9 +242,9 @@ def plot_image_sample(images, dataset_name, logdir, force_rgb=False):
     grid = make_grid(grid_images, nrow=num_channels + 1, normalize=True)
     grid = grid.permute(1, 2, 0)  # c,h,w -> h,w,c
     grid = grid.numpy()
-    # grid = np.where(grid == 0, 1, grid)
     grid = normalized_to_uint8(grid)
     Image.fromarray(grid, "RGB" if num_channels == 3 or force_rgb else "CMYK").save(img_path)
+
 
 def plot_segmented_cells(cell_masks, nuc_masks, images, dataset_name, logdir):
     # images start: 256 X 256 X 3: h,w,c
@@ -262,6 +269,5 @@ def plot_segmented_cells(cell_masks, nuc_masks, images, dataset_name, logdir):
     grid = make_grid(grid_images, nrow=1 + max_cells, normalize=True)
     grid = grid.permute(1, 2, 0)  # c,h,w -> h,w,c
     grid = grid.numpy()
-    # grid = np.where(grid == 0, 1, grid)
     grid = normalized_to_uint8(grid)
     Image.fromarray(grid, "RGB").save(img_path)

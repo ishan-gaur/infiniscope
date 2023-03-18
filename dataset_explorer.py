@@ -16,11 +16,10 @@ import numpy as np
 import prettyprinter as pp
 from collections import Counter
 import matplotlib.pyplot as plt
-from dataset_features import protein, cell_line, location, img_hash, int_mean, int_var, img_haralick
+from dataset_features import protein, cell_line, location, img_hash, int_mean, int_var, img_haralick, nuc_cyto
 from dataset_utils import load_config, allocate_logdir
 from dataset_utils import HPAToPandas, get_counts, get_common_features, get_total_features
-from dataset_vis import plot_profile, plot_haralick_umap
-
+from dataset_vis import plot_profile, plot_haralick_umap, plot_conditional_dist
 
 config, opt = load_config()
 logdir = allocate_logdir(config, opt)
@@ -29,7 +28,7 @@ log_file = os.path.join(logdir, f"dataset_explorer.log")
 print(f"Saving logs to {log_file}")
 sys.stdout = open(log_file, "w")
 
-features = [img_hash, protein, cell_line, location, int_mean, int_var, img_haralick]
+features = [img_hash, protein, cell_line, location, int_mean, int_var, img_haralick, nuc_cyto]
 datasets = HPAToPandas(config, features, expand="total", cache=True, logdir=logdir)
 counts = get_counts(datasets, features)
 
@@ -50,6 +49,8 @@ pp.pprint(f"Total features: {total_counts}")
 for dataset_name, dataset in datasets.items():
     plot_haralick_umap(dataset, dataset_name, common[location.name],
         logdir, sample_size=10)
+    
+plot_conditional_dist(nuc_cyto, cell_line, datasets, 'train', 'validation', logdir)
 
 # for feature in common:
 #     prop_shared = len(common[feature]) / len(total[feature])
