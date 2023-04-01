@@ -72,18 +72,21 @@ def plot_profile(features, counts, filename, logdir):
 
 def get_feature_values(feature, dataset, filter):
     try:
-        V = np.concatenate(
-            dataset[feature.name][filter].values.tolist()
+        V = np.stack(
+            [
+                np.concatenate(v)
+                for v in dataset[feature.name][filter].values.tolist()
+            ]
         )
     except ValueError:
-        V = np.concatenate([
+        V = np.stack([
             dataset[feature.name][filter].values.tolist()
         ])
     return V
 
 
 def plot_conditional_dist(pred_feature, cond_feature, datasets, source_data, target_data, prior,
-                          logdir, summary='histogram', dims=None, bins=5, sample_size=None):
+                          logdir, summary=None, dims=None, bins=5, sample_size=None):
     common = get_common_features({source_data: datasets[source_data], target_data: datasets[target_data]}, [cond_feature])
     kl_divs = {pred_feature.name:[], "kl_div": []}
     df = pd.DataFrame()

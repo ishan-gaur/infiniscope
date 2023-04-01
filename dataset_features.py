@@ -15,7 +15,8 @@ from hpacellseg.utils import label_cell, label_nuclei
 # get_feature: function that takes a sample from a dataset and returns the feature
 # countable: boolean that tells us if it makes sense to count the feature
 # multiple: boolean that tells us if the feature can simultaneously have multiple values and should be explanded to a one-hot encoding
-Feature = namedtuple("feature", ["name", "get_feature", "countable", "multiple"])
+# single_cell: basically should you run get_feature over the cell masks from the segmented image
+Feature = namedtuple("feature", ["name", "get_feature", "countable", "multiple", "single_cell"])
 
 def expand_feature(feature, value):
     return f"{feature.name}: \"{value}\""
@@ -98,6 +99,11 @@ def get_segmented_cells(samples):
     return cell_masks, nuc_masks
 
 
+def get_percent_dark(sample):
+    img = get_image(sample)
+    return np.sum(img[:, :, 1] < 0.1) / (img.shape[0] * img.shape[1])
+
+
 def get_nuc_cyto(sample):
     cell_masks, nuclei_masks = get_segmented_cells([sample])
     cell_masks = np.stack(cell_masks[0])[:, :, :, 0]
@@ -110,15 +116,15 @@ def get_nuc_cyto(sample):
     return expression_dist
 
 
-image = Feature("Image", get_image, False, False)
-img_hash = Feature("Image Hash", get_image_hash, False, False)
-int_mean = Feature("Intensity Mean", get_intensity_mean, False, False)
-int_var = Feature("Intensity Var", get_intensity_var, False, False)
-img_haralick = Feature("Haralick Features", get_image_haralick, False, False)
-protein = Feature("Protein", get_protein, True, False) # arguable, but too many proteins to one-hot encode
-cell_line = Feature("Cell Line", get_cell_line, True, False)
-location = Feature("Location", get_location, True, True)
-nuc_cyto = Feature("Nuclei & Cytoplasm Expression", get_nuc_cyto, False, False)
+image = Feature("Image", get_image, False, False, False)
+img_hash = Feature("Image Hash", get_image_hash, False, False, False)
+int_mean = Feature("Intensity Mean", get_intensity_mean, False, False, False)
+int_var = Feature("Intensity Var", get_intensity_var, False, False, False)
+img_haralick = Feature("Haralick Features", get_image_haralick, False, False, False)
+protein = Feature("Protein", get_protein, True, False, False) # arguable, but too many proteins to one-hot encode
+cell_line = Feature("Cell Line", get_cell_line, True, False, False)
+location = Feature("Location", get_location, True, True, False)
+nuc_cyto = Feature("Nuclei & Cytoplasm Expression", get_nuc_cyto, False, False, True)
 
 
 # TODO: untested as far as missing/features
@@ -155,11 +161,11 @@ def get_features(samples, features, cache, logdir, debug_count=4, dataset_name="
         sample_features.append(feature_values)
         changed |= sample_changed
 
-    # images = [torch.from_numpy(get_image(sample)) for sample in samples[:debug_count]]
-    # plot_image_sample(images, dataset_name, logdir, force_rgb=True)
+    images = [torch.from_numpy(get_image(sample)) for sample in samples[:debug_count]]
+    plot_image_sample(images, dataset_name, logdir, force_rgb=True)
 
-    # cell_masks, nuc_masks = get_segmented_cells(samples[:debug_count])
-    # plot_segmented_cells(cell_masks, nuc_masks, images, dataset_name, logdir)
+    cell_masks, nuc_masks = get_segmented_cells(samples[:debug_count])
+    plot_segmented_cells(cell_masks, nuc_masks, images, dataset_name, logdir)
 
     if changed:
         with open(cache_path, "wb") as f:
@@ -218,6 +224,7 @@ def cmyk_to_rgb(img, chw=True):
     rgb_img[0] = translated[1] + translated[2]
     rgb_img[1] = translated[0] + translated[2]
     rgb_img[2] = translated[0] + translated[1]
+    rgb_img /= 2
     return rgb_img
 
 
