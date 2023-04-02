@@ -26,6 +26,19 @@
             "justMyCode": true
         },
         {
+            "type": "python",
+            "name": "Analyze: checkpoint-analysis-debug",
+            "request": "launch",
+            "program": "model_analysis.py",
+            "args": [
+                "--dev",
+                "-b",
+                "configs/latent-diffusion/hpa-ldm-vq-4-hybrid-protein-checkpoint-debug.yaml"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
             "name": "Analyze: dataset",
             "type": "python",
             "request": "launch",

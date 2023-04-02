@@ -21,6 +21,15 @@ from dataset_utils import load_config, allocate_logdir
 from dataset_utils import HPAToPandas, get_counts, get_common_features, get_total_features
 from dataset_vis import plot_profile, plot_haralick_umap, plot_conditional_dist
 
+"""
+checkpoint:
+logs
+2023-01-17T01-02-06_hpa-ldm-vq-4-hybrid-protein-ishan
+checkpoints
+epochs=000073.ckpt
+"""
+model_checkpoint = os.path.join("logs", "2023-01-17T01-02-06_hpa-ldm-vq-4-hybrid-protein-ishan", "checkpoints", "epochs=000073.ckpt")
+
 config, opt = load_config()
 logdir = allocate_logdir(config, opt)
 
@@ -51,31 +60,15 @@ for dataset_name, dataset in datasets.items():
         logdir, sample_size=10)
     
 # Get prior to smooth distribution and reduce chance of accidental infs
-bins = 5
-smoothing = 1
-smooth_x = np.linspace(0, 1, bins)
-smooth_y = 1 - smooth_x
-smooth_x = np.append(np.concatenate([smooth_x] * smoothing), [0] * smoothing)
-smooth_y = np.append(np.concatenate([smooth_y] * smoothing), [0] * smoothing)
-nuc_cyto_prior = [smooth_x, smooth_y]
-
-plot_conditional_dist(nuc_cyto, cell_line, datasets, 'train', 'validation', nuc_cyto_prior, logdir, summary='histogram', dims=1, bins=bins)
+plot_conditional_dist(nuc_cyto, cell_line, datasets, 'train', 'validation', logdir, summary='histogram', dims=1, bins=5)
 
 # get binned histogram of intensities using a beta distribution centered at -0.5 with number of samples=bins
 # TODO: ending up just needing a uniform prior over the distribution, otherwise the KL stuff becomes ill-defined...
 # would've liked to use a beta distribution but no guarantee of covering the whole range
 # I could do it but then the total number of points I would need to sample would go up so there is an integer number in the bin with the lowest probability
-bins = 10
-int_prior = [np.linspace(-1, 1, bins)]
-plot_conditional_dist(int_mean, location, datasets, 'train', 'validation', int_prior, logdir, summary='histogram', bins=bins, sample_size=15)
+plot_conditional_dist(int_mean, location, datasets, 'train', 'validation', logdir, summary='histogram', bins=10, sample_size=15)
 
-bins = 5
-train_hara = np.stack(datasets['train'][img_haralick.name].values.tolist())
-val_hara = np.stack(datasets['validation'][img_haralick.name].values.tolist())
-hara_min = np.where(train_hara.min(axis=0) < val_hara.min(axis=0), train_hara.min(axis=0), val_hara.min(axis=0))
-hara_max = np.where(train_hara.max(axis=0) > val_hara.max(axis=0), train_hara.max(axis=0), val_hara.max(axis=0))
-hara_prior = [np.linspace(hara_min[i], hara_max[i], bins) for i in range(13)]
-plot_conditional_dist(img_haralick, location, datasets, 'train', 'validation', hara_prior, logdir, dims=4, bins=bins, sample_size=15)
+plot_conditional_dist(img_haralick, location, datasets, 'train', 'validation', logdir, dims=4, bins=5, sample_size=15)
 
 # # report KL-divergence between attribute distributions
 # # need ps to get list across all keys, not just those present in one dataset or the other

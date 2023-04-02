@@ -3,12 +3,15 @@ import umap
 import umap.plot
 import numpy as np
 import matplotlib.pyplot as plt
-from dataset_features import location, img_haralick, expand_feature
+from dataset_features import location, img_haralick, expand_feature, get_feature_values
 from dataset_utils import get_common_features
 from scipy.special import kl_div
 import seaborn as sns
 import pandas as pd
 import math
+import warnings
+import itertools
+from sklearn.preprocessing import StandardScaler
 
 
 def plot_haralick_umap(dataset, dataset_name, locations, logdir, sample_size=100):
@@ -48,7 +51,8 @@ def plot_haralick_umap(dataset, dataset_name, locations, logdir, sample_size=100
             loc_hara_list[i, 0] = loc[0]
 
     # plot the UMAP
-    transform = umap.UMAP().fit(np.stack(loc_hara_list[:, 1])) # haralick features
+    scaled_loc_hara = StandardScaler().fit_transform(np.stack(loc_hara_list[:, 1]))
+    transform = umap.UMAP().fit(np.stack(scaled_loc_hara)) # haralick features
     plt.clf()
     plot = umap.plot.points(transform, labels=loc_hara_list[:, 0])
     plot.get_legend().set(bbox_to_anchor=(1.05, 1.0))
@@ -70,23 +74,8 @@ def plot_profile(features, counts, filename, logdir):
     plt.savefig(os.path.join(logdir, f'{filename}.png'))
 
 
-def get_feature_values(feature, dataset, filter):
-    try:
-        V = np.stack(
-            [
-                np.concatenate(v)
-                for v in dataset[feature.name][filter].values.tolist()
-            ]
-        )
-    except ValueError:
-        V = np.stack([
-            dataset[feature.name][filter].values.tolist()
-        ])
-    return V
-
-
-def plot_conditional_dist(pred_feature, cond_feature, datasets, source_data, target_data, prior,
-                          logdir, summary=None, dims=None, bins=5, sample_size=None):
+def plot_conditional_dist(pred_feature, cond_feature, datasets, source_data, target_data,
+                          logdir, summary=None, dims=None, bins=5, sample_size=None, use_prior=True):
     common = get_common_features({source_data: datasets[source_data], target_data: datasets[target_data]}, [cond_feature])
     kl_divs = {pred_feature.name:[], "kl_div": []}
     df = pd.DataFrame()
@@ -119,18 +108,26 @@ def plot_conditional_dist(pred_feature, cond_feature, datasets, source_data, tar
 
         # TODO: maybe these functions can be separated
         # sample elements of P and Q to get a better estimate of the KL divergence
+        min_sample = (bins + 1) ** (dims + 1)
         if sample_size is None:
-            sample_size = (bins + 1) ** (dims + 1)
+            sample_size = min_sample
+        elif  sample_size < min_sample and use_prior:
+            warnings.warn("Sample size is less than the virtual samples in the prior")
 
-        print(Q.shape[0])
-        if Q.shape[0] < 2 * sample_size:
-            continue
+        if use_prior:
+            data_min = np.where(P.min(axis=0) < Q.min(axis=0), P.min(axis=0), Q.min(axis=0))
+            data_max = np.where(P.max(axis=0) > Q.max(axis=0), P.max(axis=0), Q.max(axis=0))
+            prior = [np.linspace(data_min[i], data_max[i], bins) for i in range(dims)]
+            prior = np.meshgrid(*prior)
+        else:
+            prior = [[] for _ in range(dims)]
+            raise warnings.warn("Warning, not using prior is untested.")
 
         for _ in range(30):
             P_sample = P[np.random.choice(P.shape[0], size=sample_size, replace=True)]
             Q_sample = Q[np.random.choice(Q.shape[0], size=sample_size, replace=True)]
-            P_i = np.swapaxes(np.array([np.concatenate([P_sample[:, i], prior[i]]) for i in range(dims)]), 0, 1)
-            Q_i = np.swapaxes(np.array([np.concatenate([Q_sample[:, i], prior[i]]) for i in range(dims)]), 0, 1)
+            P_i = np.swapaxes(np.array([np.concatenate([P_sample[:, i], prior[i].flatten()]) for i in range(dims)]), 0, 1)
+            Q_i = np.swapaxes(np.array([np.concatenate([Q_sample[:, i], prior[i].flatten()]) for i in range(dims)]), 0, 1)
 
             P_hist, _ = np.histogramdd(P_i, bins=bins, density=True)
             P_hist /= P_hist.sum()
@@ -152,7 +149,10 @@ def plot_conditional_dist(pred_feature, cond_feature, datasets, source_data, tar
         plt.clf()
         sns.violinplot(data=df, x=cond_feature.name, y=pred_feature.name, hue="dataset", split=True)
         plt.tight_layout()
-    plt.savefig(os.path.join(logdir, f'Q={source_data},P={target_data}_{pred_feature.name}|{cond_feature.name}_{summary}.png'))
+    elif summary == 'umap':
+        return NotImplementedError("UMAP plots not implemented yet.")
+    if summary is not None:
+        plt.savefig(os.path.join(logdir, f'Q={source_data},P={target_data}_{pred_feature.name}|{cond_feature.name}_{summary}.png'))
 
     # plot bar chart from kl_divs dictionary
     plt.clf()

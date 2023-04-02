@@ -10,6 +10,7 @@ from torchvision.utils import make_grid
 import torch
 import hpacellseg.cellsegmentator as cellsegmentor
 from hpacellseg.utils import label_cell, label_nuclei
+from collections.abc import Iterable
 
 # name of the feature: index you want in the pandas dataframe
 # get_feature: function that takes a sample from a dataset and returns the feature
@@ -278,3 +279,20 @@ def plot_segmented_cells(cell_masks, nuc_masks, images, dataset_name, logdir):
     grid = grid.numpy()
     grid = normalized_to_uint8(grid)
     Image.fromarray(grid, "RGB").save(img_path)
+
+
+def get_feature_values(feature, dataset, filter):
+    feature_values = dataset[feature.name][filter].values.tolist()
+    if feature.multiple:
+        raise NotImplementedError("Multiple features 'heterogenous element lengths' not yet implemented")
+    elif not isinstance(feature_values[0], Iterable):
+        return np.array(feature_values)
+    elif feature.single_cell: # inner dim is not relevant
+        return np.concatenate(feature_values)
+    else:
+        return np.stack(feature_values)
+    # except ValueError:
+    #     V = np.stack([
+    #         dataset[feature.name][filter].values.tolist()
+    #     ])
+

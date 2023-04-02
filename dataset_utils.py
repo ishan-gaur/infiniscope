@@ -12,6 +12,7 @@ import pandas as pd
 from omegaconf import OmegaConf
 import matplotlib.pyplot as plt
 # from scipy.special import kl_div
+import torch
 from pytorch_lightning import seed_everything
 from pytorch_lightning.trainer import Trainer
 from torchvision.utils import save_image
@@ -335,3 +336,18 @@ class DatasetIterator:
 
 #     def get_feature(self, feature):
 #         return self.prof[feature]
+
+# config should have the path to the desired validation dataset
+# should also specify the model checkpoint to use
+def generate_checkpoint_predictions(config):
+    data_explorer = DatasetExplorer(config)
+    if "analysis" not in data_explorer.data.datasets:
+        data = data_explorer.data.datasets["validation"]
+    else:
+        data = data_explorer.data.datasets["analysis"]
+    model = instantiate_from_config(config.model)
+    checkpoint = torch.load(config.checkpoint)
+    model.load_state_dict(checkpoint)
+    model.eval()
+    predictions = model.predict(data, config.logdir)
+    print("bleh")
